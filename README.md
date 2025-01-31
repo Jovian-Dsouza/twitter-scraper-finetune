@@ -70,3 +70,13 @@ Example without date: `npm run generate-virtuals -- pmarca`
 
 The generated character file will be in the `pipeline/[username]/[date]/character/character.json` directory.
 The generated tweet dataset file will be in `pipeline/[username]/[date]/raw/tweets.json`.
+
+# Docker
+```bash
+docker run -it -v $(pwd):/usr/src/app twitter-scraper
+```
+
+# Docker Compose
+```bash
+docker-compose up --build
+```
