@@ -5,6 +5,8 @@ services:
     build: .
     volumes:
       - ./pipeline:/usr/src/app/pipeline
+      - ./cookies:/usr/src/app/cookies
+      - ./characters:/usr/src/app/characters
     environment:
       - TWITTER_USERNAME=${TWITTER_USERNAME}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
