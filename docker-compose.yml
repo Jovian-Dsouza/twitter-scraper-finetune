@@ -4,9 +4,7 @@ services:
   scraper:
     build: .
     volumes:
-      - ./pipeline:/usr/src/app/pipeline
-      - ./cookies:/usr/src/app/cookies
-      - ./characters:/usr/src/app/characters
+      - .:/usr/src/app
     environment:
       - TWITTER_USERNAME=${TWITTER_USERNAME}
       - TWITTER_PASSWORD=${TWITTER_PASSWORD}
@@ -16,4 +14,7 @@ services:
       - MAX_RETRIES=3
       - RETRY_DELAY=5000
       - MIN_DELAY=1000
-      - MAX_DELAY=3000 
+      - MAX_DELAY=3000
+    # Keep the container running
+    stdin_open: true
+    tty: true 
