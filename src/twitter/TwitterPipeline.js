@@ -474,6 +474,11 @@ async saveCookies() {
 
   async collectTweets(scraper) {
     try {
+      // Load previous progress if any
+      const progress = await this.loadProgress();
+      let lastTweetId = progress?.lastTweetId;
+      let totalCollected = progress?.totalCollected || 0;
+
       const profile = await scraper.getProfile(this.username);
       const totalExpectedTweets = profile.tweetsCount;
 
@@ -595,6 +600,22 @@ async saveCookies() {
             : ""
         }`
       );
+
+      // Save progress periodically
+      if (allTweets.size % 100 === 0) {
+        const lastTweet = Array.from(allTweets.values()).pop();
+        await this.saveProgress(
+          lastTweet.id,
+          lastTweet.timestamp,
+          allTweets.size
+        );
+      }
+
+      // Save final progress
+      await this.saveProgress(null, null, allTweets.size, {
+        completed: true,
+        endTime: new Date().toISOString()
+      });
 
       return Array.from(allTweets.values());
     } catch (error) {
@@ -869,6 +890,82 @@ async saveCookies() {
         error: error.message,
       });
     }
+  }
+
+  async saveProgress(lastTweetId, lastTimestamp, totalCollected, metadata = {}) {
+    try {
+      const progressData = {
+        username: this.username,
+        lastTweetId,
+        lastTimestamp,
+        totalCollected,
+        startTime: this.stats.startTime,
+        oldestTweetDate: this.stats.oldestTweetDate?.toISOString(),
+        newestTweetDate: this.stats.newestTweetDate?.toISOString(),
+        stats: {
+          requestCount: this.stats.requestCount,
+          rateLimitHits: this.stats.rateLimitHits,
+          retriesCount: this.stats.retriesCount,
+          uniqueTweets: this.stats.uniqueTweets,
+          fallbackCount: this.stats.fallbackCount,
+          fallbackUsed: this.stats.fallbackUsed
+        },
+        metadata,
+        updatedAt: new Date().toISOString()
+      };
+
+      // Ensure meta directory exists
+      const progressPath = path.join(this.dataOrganizer.baseDir, 'meta', 'progress.json');
+      await fs.mkdir(path.dirname(progressPath), { recursive: true });
+
+      // Save progress data
+      await fs.writeFile(progressPath, JSON.stringify(progressData, null, 2));
+      Logger.debug('Saved collection progress');
+    } catch (error) {
+      Logger.warn(`Failed to save progress: ${error.message}`);
+    }
+  }
+
+  async loadProgress() {
+    try {
+      const progressPath = path.join(this.dataOrganizer.baseDir, 'meta', 'progress.json');
+      
+      // Check if progress file exists
+      if (await fs.access(progressPath).catch(() => false)) {
+        const progressData = JSON.parse(await fs.readFile(progressPath, 'utf-8'));
+        
+        // Validate progress data
+        if (progressData.username !== this.username) {
+          Logger.warn('Progress file exists but for different username');
+          return null;
+        }
+
+        // Restore stats
+        if (progressData.stats) {
+          Object.assign(this.stats, progressData.stats);
+        }
+
+        // Restore dates if they exist
+        if (progressData.oldestTweetDate) {
+          this.stats.oldestTweetDate = new Date(progressData.oldestTweetDate);
+        }
+        if (progressData.newestTweetDate) {
+          this.stats.newestTweetDate = new Date(progressData.newestTweetDate);
+        }
+
+        Logger.info(`📋 Loaded previous progress - ${progressData.totalCollected.toLocaleString()} tweets collected`);
+        
+        return {
+          lastTweetId: progressData.lastTweetId,
+          lastTimestamp: progressData.lastTimestamp,
+          totalCollected: progressData.totalCollected,
+          metadata: progressData.metadata || {}
+        };
+      }
+    } catch (error) {
+      Logger.warn(`Failed to load progress: ${error.message}`);
+    }
+    return null;
   }
 }
 
