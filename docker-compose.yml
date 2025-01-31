@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  scraper:
+    build: .
+    volumes:
+      - ./pipeline:/usr/src/app/pipeline
+    environment:
+      - TWITTER_USERNAME=${TWITTER_USERNAME}
+      - TWITTER_PASSWORD=${TWITTER_PASSWORD}
+      - TWITTER_EMAIL=${TWITTER_EMAIL}
+      - TARGET_USERNAME=${TARGET_USERNAME}
+      - MAX_TWEETS=1000
+      - MAX_RETRIES=3
+      - RETRY_DELAY=5000
+      - MIN_DELAY=1000
+      - MAX_DELAY=3000 
