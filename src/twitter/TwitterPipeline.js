@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { format } from "date-fns";
 import path from "path";
 import fs from "fs/promises";
+import { EventEmitter } from 'events';
 
 // Imported Files
 import Logger from "./Logger.js";
@@ -22,8 +23,9 @@ import { Cluster } from "puppeteer-cluster";
 puppeteer.use(StealthPlugin());
 puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
 
-class TwitterPipeline {
+class TwitterPipeline extends EventEmitter {
   constructor(username) {
+    super();
     this.username = username;
     this.dataOrganizer = new DataOrganizer("pipeline", username);
     this.paths = this.dataOrganizer.getPaths();
@@ -698,9 +700,21 @@ async saveCookies() {
       const analytics = await this.dataOrganizer.saveTweets(allTweets);
       Logger.stopSpinner();
 
+      // Calculate and save statistics
+      const stats = {
+        duration: ((Date.now() - startTime) / 1000).toFixed(1),
+        tweetsCollected: allTweets.length,
+        analytics: analytics,
+        rateLimitHits: this.stats.rateLimitHits,
+        fallbackUsed: this.stats.fallbackUsed,
+        fallbackCount: this.stats.fallbackCount
+      };
+
+      // Save overall progress
+      await this.saveOverallProgress(stats);
+
       // Calculate final statistics
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      const tweetsPerMinute = (allTweets.length / (duration / 60)).toFixed(1);
+      const tweetsPerMinute = (allTweets.length / (stats.duration / 60)).toFixed(1);
       const successRate = (
         (allTweets.length /
           (this.stats.requestCount + this.stats.fallbackCount)) *
@@ -714,7 +728,7 @@ async saveCookies() {
         Replies: analytics.replies.toLocaleString(),
         Retweets: analytics.retweets.toLocaleString(),
         "Date Range": `${analytics.timeRange.start} to ${analytics.timeRange.end}`,
-        Runtime: `${duration} seconds`,
+        Runtime: `${stats.duration} seconds`,
         "Collection Rate": `${tweetsPerMinute} tweets/minute`,
         "Success Rate": `${successRate}%`,
         "Rate Limit Hits": this.stats.rateLimitHits.toLocaleString(),
@@ -791,6 +805,13 @@ async saveCookies() {
 
       return analytics;
     } catch (error) {
+      // Update overall progress with failure
+      await this.saveOverallProgress({
+        error: error.message,
+        completedAt: new Date().toISOString(),
+        success: false
+      });
+      
       Logger.error(`Pipeline failed: ${error.message}`);
       await this.logError(error, {
         stage: "pipeline_execution",
@@ -966,6 +987,38 @@ async saveCookies() {
       Logger.warn(`Failed to load progress: ${error.message}`);
     }
     return null;
+  }
+
+  async saveOverallProgress(userStats) {
+    try {
+      const overallProgressPath = path.join(
+        process.cwd(),
+        'pipeline',
+        'overall_progress.json'
+      );
+
+      let overallProgress = {};
+      try {
+        const existing = await fs.readFile(overallProgressPath, 'utf-8');
+        overallProgress = JSON.parse(existing);
+      } catch {
+        // File doesn't exist yet
+      }
+
+      overallProgress[this.username] = {
+        completedAt: new Date().toISOString(),
+        stats: userStats,
+        success: true
+      };
+
+      await fs.mkdir(path.dirname(overallProgressPath), { recursive: true });
+      await fs.writeFile(
+        overallProgressPath, 
+        JSON.stringify(overallProgress, null, 2)
+      );
+    } catch (error) {
+      Logger.warn(`Failed to save overall progress: ${error.message}`);
+    }
   }
 }
 

@@ -16,15 +16,16 @@ process.on('uncaughtException', (error) => {
 });
 
 const args = process.argv.slice(2);
-const username = args[0] || 'degenspartan';
+// Accept comma-separated list of usernames or default to single user
+const usernames = args[0] ? args[0].split(',').map(u => u.trim()) : ['degenspartan'];
 
-const pipeline = new TwitterPipeline(username);
+let currentPipeline = null;
 
 const cleanup = async () => {
   Logger.warn('\n🛑 Received termination signal. Cleaning up...');
   try {
-    if (pipeline.scraper) {
-      await pipeline.scraper.logout();
+    if (currentPipeline?.scraper) {
+      await currentPipeline.scraper.logout();
       Logger.success('🔒 Logged out successfully.');
     }
   } catch (error) {
@@ -36,4 +37,22 @@ const cleanup = async () => {
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
-pipeline.run().catch(() => process.exit(1));
+// Process users sequentially
+const processUsers = async () => {
+  for (const username of usernames) {
+    Logger.info(`\n🎯 Processing user: @${username}`);
+    currentPipeline = new TwitterPipeline(username);
+    try {
+      await currentPipeline.run();
+    } catch (error) {
+      Logger.error(`Failed to process @${username}: ${error.message}`);
+      // Continue with next user instead of exiting
+      continue;
+    }
+  }
+};
+
+processUsers().catch((error) => {
+  Logger.error(`Pipeline execution failed: ${error.message}`);
+  process.exit(1);
+});
