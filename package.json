@@ -8,6 +8,7 @@
     "twitter": "node src/twitter/index.js",
     "blog": "node src/blog/blogScrape.js",
     "character": "node src/character/GenerateCharacter.js",
+    "character:merge": "node src/character/MergeCharacters.js",
     "finetune": "node ./scripts/finetune.js",
     "finetune:test": "node ./scripts/finetune.js --test"
   },
