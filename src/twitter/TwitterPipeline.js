@@ -413,63 +413,98 @@ async saveCookies() {
 
         let lastTweetCount = 0;
         let unchangedCount = 0;
+        let errorCount = 0;
+        const MAX_ERRORS = 3;
 
         while (
           unchangedCount < 3 &&
+          errorCount < MAX_ERRORS &&
           Date.now() - sessionStartTime < this.config.fallback.sessionDuration
         ) {
-          await page.evaluate(() => {
-            window.scrollBy(0, 500);
-          });
+          try {
+            await page.evaluate(() => {
+              window.scrollBy(0, 500);
+            });
 
-          await this.randomDelay(1000, 2000);
+            await this.randomDelay(1000, 2000);
 
-          const newTweets = await page.evaluate(() => {
-            const tweetElements = Array.from(
-              document.querySelectorAll('article[data-testid="tweet"]')
-            );
-            return tweetElements
-              .map((tweet) => {
-                try {
-                  return {
-                    id: tweet.getAttribute("data-tweet-id"),
-                    text: tweet.querySelector("div[lang]")?.textContent || "",
-                    timestamp: tweet
-                      .querySelector("time")
-                      ?.getAttribute("datetime"),
-                    metrics: Array.from(
-                      tweet.querySelectorAll('span[data-testid$="count"]')
-                    ).map((m) => m.textContent),
-                  };
-                } catch (e) {
-                  return null;
-                }
-              })
-              .filter((t) => t && t.id);
-          });
+            const newTweets = await page.evaluate(() => {
+              const tweetElements = Array.from(
+                document.querySelectorAll('article[data-testid="tweet"]')
+              );
+              return tweetElements
+                .map((tweet) => {
+                  try {
+                    return {
+                      id: tweet.getAttribute("data-tweet-id"),
+                      text: tweet.querySelector("div[lang]")?.textContent || "",
+                      timestamp: tweet
+                        .querySelector("time")
+                        ?.getAttribute("datetime"),
+                      metrics: Array.from(
+                        tweet.querySelectorAll('span[data-testid$="count"]')
+                      ).map((m) => m.textContent),
+                    };
+                  } catch (e) {
+                    return null;
+                  }
+                })
+                .filter((t) => t && t.id);
+            });
 
-          for (const tweet of newTweets) {
-            if (!tweets.has(tweet.id)) {
-              tweets.add(tweet);
-              this.stats.fallbackCount++;
+            for (const tweet of newTweets) {
+              if (!tweets.has(tweet.id)) {
+                tweets.add(tweet);
+                this.stats.fallbackCount++;
+              }
+            }
+
+            if (tweets.size === lastTweetCount) {
+              unchangedCount++;
+            } else {
+              unchangedCount = 0;
+              lastTweetCount = tweets.size;
+            }
+
+            // Reset error count on successful iteration
+            errorCount = 0;
+
+          } catch (error) {
+            errorCount++;
+            Logger.warn(`Fallback collection error (${errorCount}/${MAX_ERRORS}): ${error.message}`);
+            
+            if (errorCount < MAX_ERRORS) {
+              // Wait a bit longer after an error
+              await this.randomDelay(5000, 10000);
+              
+              // Try to recover by refreshing the page
+              try {
+                await page.reload({ waitUntil: 'networkidle0' });
+                await this.randomDelay(2000, 4000);
+              } catch (refreshError) {
+                Logger.warn(`Failed to refresh page: ${refreshError.message}`);
+              }
             }
           }
-
-          if (tweets.size === lastTweetCount) {
-            unchangedCount++;
-          } else {
-            unchangedCount = 0;
-            lastTweetCount = tweets.size;
-          }
         }
+
+        if (errorCount >= MAX_ERRORS) {
+          Logger.warn('Fallback collection stopped due to too many errors');
+        }
+
       } catch (error) {
-        Logger.warn(`Fallback collection error: ${error.message}`);
-        throw error;
+        Logger.warn(`Fallback task error: ${error.message}`);
+        // Don't throw the error - let the collection continue with what we have
       }
     };
 
-    await this.cluster.task(fallbackTask);
-    await this.cluster.queue({});
+    try {
+      await this.cluster.task(fallbackTask);
+      await this.cluster.queue({});
+    } catch (error) {
+      Logger.warn(`Cluster execution error: ${error.message}`);
+      // Don't throw - return whatever tweets we managed to collect
+    }
 
     return Array.from(tweets);
   }
@@ -653,7 +688,7 @@ async saveCookies() {
         console.log(chalk.white(tweet.text));
         console.log(
           chalk.gray(
-            `❤️ ${tweet.likes.toLocaleString()} | 🔄 ${tweet.retweetCount.toLocaleString()} | 💬 ${tweet.replies.toLocaleString()}`
+            `❤️ ${tweet.likes.toLocaleString()} | 🔄 ${tweet.retweetCount.toLocaleString()} | �� ${tweet.replies.toLocaleString()}`
           )
         );
         console.log(chalk.gray(`🔗 ${tweet.permanentUrl}`));
@@ -798,7 +833,7 @@ async saveCookies() {
       }
 
       // Show sample tweets
-      await this.showSampleTweets(allTweets);
+      // await this.showSampleTweets(allTweets);
 
       // Cleanup
       await this.cleanup();
@@ -951,42 +986,60 @@ async saveCookies() {
     try {
       const progressPath = path.join(this.dataOrganizer.baseDir, 'meta', 'progress.json');
       
-      // Check if progress file exists
-      if (await fs.access(progressPath).catch(() => false)) {
-        const progressData = JSON.parse(await fs.readFile(progressPath, 'utf-8'));
-        
-        // Validate progress data
-        if (progressData.username !== this.username) {
-          Logger.warn('Progress file exists but for different username');
-          return null;
-        }
-
-        // Restore stats
-        if (progressData.stats) {
-          Object.assign(this.stats, progressData.stats);
-        }
-
-        // Restore dates if they exist
-        if (progressData.oldestTweetDate) {
-          this.stats.oldestTweetDate = new Date(progressData.oldestTweetDate);
-        }
-        if (progressData.newestTweetDate) {
-          this.stats.newestTweetDate = new Date(progressData.newestTweetDate);
-        }
-
-        Logger.info(`📋 Loaded previous progress - ${progressData.totalCollected.toLocaleString()} tweets collected`);
-        
-        return {
-          lastTweetId: progressData.lastTweetId,
-          lastTimestamp: progressData.lastTimestamp,
-          totalCollected: progressData.totalCollected,
-          metadata: progressData.metadata || {}
-        };
+      // Check if progress file exists using fs.stat instead of fs.access
+      try {
+        await fs.stat(progressPath);
+      } catch {
+        // File doesn't exist
+        return null;
       }
+
+      // Read and parse progress data
+      const progressData = JSON.parse(await fs.readFile(progressPath, 'utf-8'));
+      
+      // Validate progress data
+      if (!progressData || progressData.username !== this.username) {
+        Logger.warn('Progress file exists but for different username or invalid format');
+        return null;
+      }
+
+      // Restore stats if they exist
+      if (progressData.stats) {
+        // Only restore numeric and boolean values
+        const statsToRestore = {
+          requestCount: progressData.stats.requestCount || 0,
+          rateLimitHits: progressData.stats.rateLimitHits || 0,
+          retriesCount: progressData.stats.retriesCount || 0,
+          uniqueTweets: progressData.stats.uniqueTweets || 0,
+          fallbackCount: progressData.stats.fallbackCount || 0,
+          fallbackUsed: progressData.stats.fallbackUsed || false
+        };
+        Object.assign(this.stats, statsToRestore);
+      }
+
+      // Restore dates if they exist
+      if (progressData.oldestTweetDate) {
+        this.stats.oldestTweetDate = new Date(progressData.oldestTweetDate);
+      }
+      if (progressData.newestTweetDate) {
+        this.stats.newestTweetDate = new Date(progressData.newestTweetDate);
+      }
+
+      // Only log if we actually have collected tweets
+      if (progressData.totalCollected > 0) {
+        Logger.info(`📋 Loaded previous progress - ${progressData.totalCollected.toLocaleString()} tweets collected`);
+      }
+      
+      return {
+        lastTweetId: progressData.lastTweetId,
+        lastTimestamp: progressData.lastTimestamp,
+        totalCollected: progressData.totalCollected || 0,
+        metadata: progressData.metadata || {}
+      };
     } catch (error) {
       Logger.warn(`Failed to load progress: ${error.message}`);
+      return null;
     }
-    return null;
   }
 
   async saveOverallProgress(userStats) {
